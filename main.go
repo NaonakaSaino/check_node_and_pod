@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,51 +14,72 @@ type nodeAndPods struct {
 	pods []string
 }
 
+type runningPod struct {
+	pName string
+	nName string
+}
+
+type response struct {
+	Items []Item `json:"items"`
+}
+
+type Item struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+	Spec struct {
+		NodeName string `json:"nodeName"`
+	} `json:"spec"`
+}
+
 func main() {
-	podsStdOut, err := exec.Command("kubectl", "get", "pods", "-o=jsonpath='{.items[*].metadata.name}'").Output()
+
+	res, err := exec.Command("kubectl", "get", "pods", "-o", "json").Output()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	podsStr := strings.Replace(string(podsStdOut), "'", "", -1)
-	pods := strings.Split(podsStr, " ")
-	fmt.Println("pods:", len(pods))
 
-	nodesStdOut, err := exec.Command("kubectl", "get", "pods", "-o=jsonpath='{.items[*].spec.nodeName}'").Output()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	var resp response
+	if err := json.Unmarshal(res, &resp); err != nil {
+		log.Fatal(err)
 	}
-	nodesStr := strings.Replace(string(nodesStdOut), "'", "", -1)
-	nodes := strings.Split(nodesStr, " ")
-	fmt.Println("nodes:", len(nodes))
 
-	var uniqueNodes []string
-	for _, v := range nodes {
-		if !contains(uniqueNodes, v) {
-			uniqueNodes = append(uniqueNodes, v)
+	uniqueNodes := map[string]int{}
+	cnt_1 := 0
+	for _, v := range resp.Items {
+		if _, est := uniqueNodes[v.Spec.NodeName]; !est {
+			uniqueNodes[v.Spec.NodeName] = cnt_1
+			cnt_1++
 		}
 	}
 
 	nodePods := make([]nodeAndPods, len(uniqueNodes))
-	for i, v := range uniqueNodes {
-		nodePods[i].node = v
-		for j, n := range nodes {
-			if n == v {
-				nodePods[i].pods = append(nodePods[i].pods, strings.Split(pods[j], "-")[1])
-			}
+	cnt_2 := 0
+	for k, _ := range uniqueNodes {
+		nodePods[cnt_2].node = k
+		cnt_2++
+	}
+
+	runningPods := make([]runningPod, len(resp.Items))
+	cnt_3 := 0
+	for _, v := range resp.Items {
+		if v.Status.Phase == "Running" {
+			runningPods[cnt_3].nName = v.Spec.NodeName
+			runningPods[cnt_3].pName = v.Metadata.Name
+			cnt_3++
+		}
+	}
+
+	for _, v := range runningPods {
+		if v.nName != "" {
+			nodePods[uniqueNodes[v.nName]].pods = append(nodePods[uniqueNodes[v.nName]].pods, strings.Split(v.pName, "-")[1])
 		}
 	}
 	for k, _ := range nodePods {
 		fmt.Println(strings.Split(nodePods[k].node, "-")[8], nodePods[k].pods)
 	}
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
